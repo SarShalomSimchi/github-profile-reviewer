@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GitHub Profile Review</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      background: #f5f7fa;
+      color: #172033;
+    }
+
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 32px 20px;
+    }
+
+    header {
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: white;
+      border: 1px solid #dce2ea;
+      border-radius: 10px;
+      padding: 20px;
+      margin: 16px 0;
+    }
+
+    .meta {
+      color: #596579;
+      font-size: 0.95rem;
+    }
+
+    .status {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-weight: 700;
+      font-size: 0.8rem;
+    }
+
+    .success {
+      background: #e7f6ec;
+    }
+
+    .no_readme {
+      background: #fff4d6;
+    }
+
+    .error {
+      background: #fde8e8;
+    }
+
+    dt {
+      font-weight: 700;
+      margin-top: 12px;
+    }
+
+    dd {
+      margin: 4px 0 0;
+    }
+
+    a {
+      color: #164ea6;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>GitHub Profile Review</h1>
+      <p><strong>User:</strong> {{username}}</p>
+      <p class="meta">Generated: {{generatedAt}}</p>
+    </header>
+
+    {{repositoryCards}}
+  </main>
+</body>
+</html>
