@@ -3,7 +3,7 @@ name: Antigravity 308 Synthetic CI
 on:
   pull_request:
     branches:
-      - devex/antigravity-308-seed
+      - devex/antigravity-308-seed-v3
 
 jobs:
   synthetic-test:
