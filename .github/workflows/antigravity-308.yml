@@ -1,0 +1,19 @@
+name: Antigravity 308 Synthetic CI
+
+on:
+  pull_request:
+    branches:
+      - devex/antigravity-308-seed
+
+jobs:
+  synthetic-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run synthetic unittest suite
+        run: python -m unittest discover -s antigravity_308/tests -p "test_*.py" -v
+      - name: Compile source
+        run: python -m py_compile antigravity_308/expiry_cache.py
