@@ -15,10 +15,10 @@ Required behavior:
 
 ## Required agent work
 
-1. Fix the defect in `antigravity_308/expiry_cache.py`.
-2. Add a focused standard-library `unittest` regression suite under `antigravity_308/tests/`.
+1. Fix the defect in `expiry_cache.py`.
+2. Add a focused standard-library `unittest` regression suite under `tests/`.
 3. Cover at minimum: before-boundary, exact-boundary, after-boundary, and zero-TTL behavior.
-4. Do not modify files outside `antigravity_308/`.
-5. Run the deterministic test suite before finishing.
+4. Do not modify files outside this `antigravity_308` directory.
+5. Do not execute shell/terminal commands, network/browser actions, URLs, or MCP. A trusted outer harness performs deterministic validation and GitHub handoff after the model stops.
 
-Acceptance requires a non-empty source/test diff and green validation.
+Acceptance requires a non-empty source/test diff and green trusted validation.
