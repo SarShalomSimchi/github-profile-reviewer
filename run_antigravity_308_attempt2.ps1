@@ -315,7 +315,7 @@ When edits are complete, summarize exactly which files you changed and stop.
         $modelFiles = @(
             Get-ChildItem -LiteralPath $benchmark -File -Recurse |
                 ForEach-Object {
-                    $_.FullName.Substring($benchmark.Length).TrimStart('\\').Replace('\\', '/')
+                    $_.FullName.Substring($benchmark.Length).TrimStart('\').Replace('\', '/')
                 } |
                 Sort-Object -Unique
         )
@@ -352,8 +352,8 @@ When edits are complete, summarize exactly which files you changed and stop.
         $gitTests = Join-Path $gitBenchmark 'tests'
         New-Item -ItemType Directory -Force -Path $gitTests | Out-Null
         foreach ($relativeTest in $modelTests) {
-            $sourceTest = Join-Path $benchmark ($relativeTest.Replace('/', '\\'))
-            $destinationTest = Join-Path $gitBenchmark ($relativeTest.Replace('/', '\\'))
+            $sourceTest = Join-Path $benchmark ($relativeTest.Replace('/', '\'))
+            $destinationTest = Join-Path $gitBenchmark ($relativeTest.Replace('/', '\'))
             $destinationDir = Split-Path -Parent $destinationTest
             New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
             Copy-Item -LiteralPath $sourceTest -Destination $destinationTest -Force
