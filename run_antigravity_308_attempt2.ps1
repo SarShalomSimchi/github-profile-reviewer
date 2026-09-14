@@ -6,8 +6,9 @@
     $seedBranch = 'devex/antigravity-308-seed-v3'
     $attemptBranch = 'devex/antigravity-308-attempt2'
     $root = 'C:\AI-Sandboxes'
-    $work = Join-Path $root 'antigravity-308-attempt2'
-    $benchmark = Join-Path $work 'antigravity_308'
+    $work = Join-Path $root 'antigravity-308-attempt2-repo'
+    $gitBenchmark = Join-Path $work 'antigravity_308'
+    $benchmark = Join-Path $root 'antigravity-308-attempt2-model'
     $stdoutFile = Join-Path $root 'antigravity-308-attempt2.stdout.json'
     $stderrFile = Join-Path $root 'antigravity-308-attempt2.stderr.txt'
     $preflightStdoutFile = Join-Path $root 'antigravity-308-attempt2-preflight.stdout.json'
@@ -87,7 +88,10 @@
         New-Item -ItemType Directory -Force -Path $root | Out-Null
 
         if (Test-Path $work) {
-            throw "Attempt 2 workspace already exists: $work. Final attempt not started."
+            throw "Attempt 2 Git workspace already exists: $work. Final attempt not started."
+        }
+        if (Test-Path $benchmark) {
+            throw "Attempt 2 model workspace already exists: $benchmark. Final attempt not started."
         }
 
         if (Test-Path $settingsBackupPath -PathType Leaf) {
@@ -114,12 +118,19 @@
         Invoke-GitChecked -Directory $work -GitArgs @('checkout', $seedBranch)
         Invoke-GitChecked -Directory $work -GitArgs @('switch', '-c', $attemptBranch)
 
-        if (-not (Test-Path (Join-Path $benchmark 'TASK.md') -PathType Leaf)) {
-            throw 'Synthetic TASK.md is missing. Final attempt not started.'
+        if (-not (Test-Path (Join-Path $gitBenchmark 'TASK.md') -PathType Leaf)) {
+            throw 'Synthetic TASK.md is missing from the public seed. Final attempt not started.'
         }
-        if (-not (Test-Path (Join-Path $benchmark 'expiry_cache.py') -PathType Leaf)) {
-            throw 'Synthetic expiry_cache.py is missing. Final attempt not started.'
+        if (-not (Test-Path (Join-Path $gitBenchmark 'expiry_cache.py') -PathType Leaf)) {
+            throw 'Synthetic expiry_cache.py is missing from the public seed. Final attempt not started.'
         }
+
+        New-Item -ItemType Directory -Path $benchmark | Out-Null
+        Copy-Item -LiteralPath (Join-Path $gitBenchmark 'TASK.md') -Destination (Join-Path $benchmark 'TASK.md')
+        Copy-Item -LiteralPath (Join-Path $gitBenchmark 'expiry_cache.py') -Destination (Join-Path $benchmark 'expiry_cache.py')
+
+        $taskHashBefore = (Get-FileHash -LiteralPath (Join-Path $benchmark 'TASK.md') -Algorithm SHA256).Hash
+        $sourceHashBefore = (Get-FileHash -LiteralPath (Join-Path $benchmark 'expiry_cache.py') -Algorithm SHA256).Hash
 
         Write-Host '=== VALIDATION / GITHUB HANDOFF PREFLIGHT (NO MODEL CALL) ===' -ForegroundColor Cyan
 
@@ -128,9 +139,9 @@
             throw 'Python is unavailable for trusted validation. Final attempt not started.'
         }
 
-        Push-Location $work
+        Push-Location $benchmark
         try {
-            & python -c "from antigravity_308.expiry_cache import ExpiryCache; c=ExpiryCache(); c.set('k','v',0,now=1.0); assert c.get('k',now=1.0) == 'v'"
+            & python -c "from expiry_cache import ExpiryCache; c=ExpiryCache(); c.set('k','v',0,now=1.0); assert c.get('k',now=1.0) == 'v'"
             if ($LASTEXITCODE -ne 0) {
                 throw 'Synthetic baseline is not in the expected intentionally-failing boundary state. Final attempt not started.'
             }
@@ -299,7 +310,54 @@ When edits are complete, summarize exactly which files you changed and stop.
             throw "Antigravity Attempt 2 status was $($result.status)."
         }
 
-        Write-Host '=== TRUSTED DIFF SCOPE CHECK ===' -ForegroundColor Cyan
+        Write-Host '=== TRUSTED MODEL-WORKSPACE SCOPE CHECK ===' -ForegroundColor Cyan
+
+        $modelFiles = @(
+            Get-ChildItem -LiteralPath $benchmark -File -Recurse |
+                ForEach-Object {
+                    $_.FullName.Substring($benchmark.Length).TrimStart('\\').Replace('\\', '/')
+                } |
+                Sort-Object -Unique
+        )
+
+        $unexpectedModelFiles = @(
+            $modelFiles | Where-Object {
+                $_ -ne 'TASK.md' -and
+                $_ -ne 'expiry_cache.py' -and
+                $_ -notlike 'tests/test_*.py'
+            }
+        )
+        if ($unexpectedModelFiles.Count -gt 0) {
+            throw "Out-of-scope model-workspace files detected: $($unexpectedModelFiles -join ', ')"
+        }
+
+        $taskHashAfter = (Get-FileHash -LiteralPath (Join-Path $benchmark 'TASK.md') -Algorithm SHA256).Hash
+        if ($taskHashAfter -ne $taskHashBefore) {
+            throw 'TASK.md was modified by the model.'
+        }
+
+        $sourceHashAfter = (Get-FileHash -LiteralPath (Join-Path $benchmark 'expiry_cache.py') -Algorithm SHA256).Hash
+        if ($sourceHashAfter -eq $sourceHashBefore) {
+            throw 'Attempt 2 produced no source change.'
+        }
+
+        $modelTests = @(
+            $modelFiles | Where-Object { $_ -like 'tests/test_*.py' }
+        )
+        if ($modelTests.Count -eq 0) {
+            throw 'No focused regression test file was created.'
+        }
+
+        Copy-Item -LiteralPath (Join-Path $benchmark 'expiry_cache.py') -Destination (Join-Path $gitBenchmark 'expiry_cache.py') -Force
+        $gitTests = Join-Path $gitBenchmark 'tests'
+        New-Item -ItemType Directory -Force -Path $gitTests | Out-Null
+        foreach ($relativeTest in $modelTests) {
+            $sourceTest = Join-Path $benchmark ($relativeTest.Replace('/', '\\'))
+            $destinationTest = Join-Path $gitBenchmark ($relativeTest.Replace('/', '\\'))
+            $destinationDir = Split-Path -Parent $destinationTest
+            New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+            Copy-Item -LiteralPath $sourceTest -Destination $destinationTest -Force
+        }
 
         $tracked = @(
             & git -C $work diff --name-only |
@@ -312,25 +370,14 @@ When edits are complete, summarize exactly which files you changed and stop.
                 ForEach-Object { $_.Trim() }
         )
         $changed = @($tracked + $untracked | Sort-Object -Unique)
-
-        if ($changed.Count -eq 0) {
-            throw 'Attempt 2 produced no file changes.'
-        }
-
-        $unexpected = @(
+        $unexpectedGitFiles = @(
             $changed | Where-Object {
                 $_ -ne 'antigravity_308/expiry_cache.py' -and
                 $_ -notlike 'antigravity_308/tests/test_*.py'
             }
         )
-        if ($unexpected.Count -gt 0) {
-            throw "Out-of-scope changes detected: $($unexpected -join ', ')"
-        }
-        if ('antigravity_308/expiry_cache.py' -notin $changed) {
-            throw 'Expected source file was not changed.'
-        }
-        if (-not ($changed | Where-Object { $_ -like 'antigravity_308/tests/test_*.py' })) {
-            throw 'No focused regression test file was created.'
+        if ($unexpectedGitFiles.Count -gt 0) {
+            throw "Out-of-scope Git changes detected: $($unexpectedGitFiles -join ', ')"
         }
 
         Write-Host '=== TRUSTED DETERMINISTIC VALIDATION ===' -ForegroundColor Cyan
@@ -411,7 +458,10 @@ When edits are complete, summarize exactly which files you changed and stop.
         }
 
         if (Test-Path $work) {
-            Write-Host "Evidence workspace preserved at: $work" -ForegroundColor Yellow
+            Write-Host "Git evidence workspace preserved at: $work" -ForegroundColor Yellow
+        }
+        if (Test-Path $benchmark) {
+            Write-Host "Model evidence workspace preserved at: $benchmark" -ForegroundColor Yellow
         }
     }
 }
