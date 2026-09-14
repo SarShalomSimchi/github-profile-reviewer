@@ -10,6 +10,8 @@
     $benchmark = Join-Path $work 'antigravity_308'
     $stdoutFile = Join-Path $root 'antigravity-308-attempt2.stdout.json'
     $stderrFile = Join-Path $root 'antigravity-308-attempt2.stderr.txt'
+    $preflightStdoutFile = Join-Path $root 'antigravity-308-attempt2-preflight.stdout.json'
+    $preflightStderrFile = Join-Path $root 'antigravity-308-attempt2-preflight.stderr.txt'
 
     $settingsDir = Join-Path $env:USERPROFILE '.gemini\antigravity-cli'
     $settingsPath = Join-Path $settingsDir 'settings.json'
@@ -69,12 +71,17 @@
 
         $versionText = (& $agy --version 2>&1 | Out-String).Trim()
         Write-Host "Antigravity CLI: $versionText"
-        if ($versionText -notmatch '(\d+)\.(\d+)\.(\d+)') {
+        $versionMatch = [Regex]::Match($versionText, '(\d+)\.(\d+)\.(\d+)')
+        if (-not $versionMatch.Success) {
             throw 'Could not verify Antigravity CLI version. Final attempt not started.'
         }
-        $version = [Version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3])
-        if ($version -lt [Version]::new(1, 0, 6)) {
-            throw "Antigravity CLI $version predates the headless sandbox propagation fix. Final attempt not started."
+        $version = [Version]::new(
+            [int]$versionMatch.Groups[1].Value,
+            [int]$versionMatch.Groups[2].Value,
+            [int]$versionMatch.Groups[3].Value
+        )
+        if ($version -lt [Version]::new(1, 2, 0)) {
+            throw "Antigravity CLI $version is older than the configuration baseline used for this final test. Final attempt not started."
         }
 
         New-Item -ItemType Directory -Force -Path $root | Out-Null
@@ -102,10 +109,10 @@
             throw 'Synthetic public repository clone failed. Final attempt not started.'
         }
 
-        Invoke-GitChecked $work sparse-checkout init --cone
-        Invoke-GitChecked $work sparse-checkout set antigravity_308
-        Invoke-GitChecked $work checkout $seedBranch
-        Invoke-GitChecked $work switch -c $attemptBranch
+        Invoke-GitChecked -Directory $work -GitArgs @('sparse-checkout', 'init', '--cone')
+        Invoke-GitChecked -Directory $work -GitArgs @('sparse-checkout', 'set', 'antigravity_308')
+        Invoke-GitChecked -Directory $work -GitArgs @('checkout', $seedBranch)
+        Invoke-GitChecked -Directory $work -GitArgs @('switch', '-c', $attemptBranch)
 
         if (-not (Test-Path (Join-Path $benchmark 'TASK.md') -PathType Leaf)) {
             throw 'Synthetic TASK.md is missing. Final attempt not started.'
@@ -114,6 +121,37 @@
             throw 'Synthetic expiry_cache.py is missing. Final attempt not started.'
         }
 
+        Write-Host '=== VALIDATION / GITHUB HANDOFF PREFLIGHT (NO MODEL CALL) ===' -ForegroundColor Cyan
+
+        $pythonCommand = Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -eq $pythonCommand) {
+            throw 'Python is unavailable for trusted validation. Final attempt not started.'
+        }
+
+        Push-Location $work
+        try {
+            & python -c "from antigravity_308.expiry_cache import ExpiryCache; c=ExpiryCache(); c.set('k','v',0,now=1.0); assert c.get('k',now=1.0) == 'v'"
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Synthetic baseline is not in the expected intentionally-failing boundary state. Final attempt not started.'
+            }
+        } finally {
+            Pop-Location
+        }
+
+        & git -C $work push --dry-run origin "HEAD:refs/heads/$attemptBranch"
+        if ($LASTEXITCODE -ne 0) {
+            throw 'GitHub write handoff dry-run failed. Final attempt not started.'
+        }
+
+        $remoteAfterDryRun = & git -C $work ls-remote --heads origin "refs/heads/$attemptBranch"
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not verify dry-run side effects. Final attempt not started.'
+        }
+        if ($remoteAfterDryRun) {
+            throw 'Dry-run unexpectedly created the Attempt 2 branch. Final attempt not started.'
+        }
+
+        Write-Host 'Validation environment and GitHub write handoff preflight PASS.' -ForegroundColor Green
         Write-Host '=== INSTALL TEMPORARY NARROW PERMISSIONS ===' -ForegroundColor Cyan
 
         New-Item -ItemType Directory -Force -Path $settingsDir | Out-Null
@@ -179,7 +217,7 @@
 
         Push-Location $benchmark
         try {
-            $permissionRaw = (& $agy --sandbox -p '/permissions' --output-format json --print-timeout 1m 2>&1 | Out-String).Trim()
+            & $agy --sandbox -p '/permissions' --output-format json --print-timeout 1m 1> $preflightStdoutFile 2> $preflightStderrFile
             $permissionExit = $LASTEXITCODE
         } finally {
             Pop-Location
@@ -189,6 +227,7 @@
             throw 'Antigravity permission preflight failed. Final attempt not started.'
         }
 
+        $permissionRaw = (Get-Content -LiteralPath $preflightStdoutFile -Raw).Trim()
         $permissionResult = $permissionRaw | ConvertFrom-Json
         if ([string]$permissionResult.status -ne 'SUCCESS') {
             throw 'Antigravity permission preflight did not return SUCCESS. Final attempt not started.'
@@ -315,7 +354,7 @@ When edits are complete, summarize exactly which files you changed and stop.
 
         Write-Host '=== DIRECT GITHUB HANDOFF ===' -ForegroundColor Cyan
 
-        Invoke-GitChecked $work add antigravity_308/expiry_cache.py antigravity_308/tests
+        Invoke-GitChecked -Directory $work -GitArgs @('add', 'antigravity_308/expiry_cache.py', 'antigravity_308/tests')
 
         $staged = @(
             & git -C $work diff --cached --name-only |
@@ -357,6 +396,7 @@ When edits are complete, summarize exactly which files you changed and stop.
         Write-Host 'Branch pushed. Development Agent Enablement owns PR, exact-head CI, and independent review next.' -ForegroundColor Green
     }
     catch {
+        $primaryError = $_.Exception.Message
         try {
             Restore-OwnerSettings
         } catch {
@@ -364,9 +404,9 @@ When edits are complete, summarize exactly which files you changed and stop.
         }
 
         if ($attemptStarted) {
-            Write-Host "ANTIGRAVITY #308 ATTEMPT 2 STOPPED AFTER MODEL START: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "ANTIGRAVITY #308 ATTEMPT 2 STOPPED AFTER MODEL START: $primaryError" -ForegroundColor Red
         } else {
-            Write-Host "ANTIGRAVITY #308 PRECONDITION STOP: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "ANTIGRAVITY #308 PRECONDITION STOP: $primaryError" -ForegroundColor Yellow
             Write-Host 'Attempt 2 model call was not started.' -ForegroundColor Yellow
         }
 
