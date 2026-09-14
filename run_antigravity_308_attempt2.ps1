@@ -141,7 +141,7 @@
 
         Push-Location $benchmark
         try {
-            & python -c "from expiry_cache import ExpiryCache; c=ExpiryCache(); c.set('k','v',0,now=1.0); assert c.get('k',now=1.0) == 'v'"
+            & python -B -c "from expiry_cache import ExpiryCache; c=ExpiryCache(); c.set('k','v',0,now=1.0); assert c.get('k',now=1.0) == 'v'"
             if ($LASTEXITCODE -ne 0) {
                 throw 'Synthetic baseline is not in the expected intentionally-failing boundary state. Final attempt not started.'
             }
@@ -253,6 +253,28 @@
         }
         if ($permissionRaw -notmatch [Regex]::Escape($permissionPath)) {
             throw 'Antigravity did not report the scoped benchmark permission. Final attempt not started.'
+        }
+
+        $preModelFiles = @(
+            Get-ChildItem -LiteralPath $benchmark -File -Recurse |
+                ForEach-Object {
+                    $_.FullName.Substring($benchmark.Length).TrimStart('\').Replace('\', '/')
+                } |
+                Sort-Object -Unique
+        )
+        $unexpectedPreModelFiles = @(
+            $preModelFiles | Where-Object {
+                $_ -ne 'TASK.md' -and $_ -ne 'expiry_cache.py'
+            }
+        )
+        if ($unexpectedPreModelFiles.Count -gt 0) {
+            throw "Preflight left unexpected model-workspace files: $($unexpectedPreModelFiles -join ', '). Final attempt not started."
+        }
+
+        $taskHashPreModel = (Get-FileHash -LiteralPath (Join-Path $benchmark 'TASK.md') -Algorithm SHA256).Hash
+        $sourceHashPreModel = (Get-FileHash -LiteralPath (Join-Path $benchmark 'expiry_cache.py') -Algorithm SHA256).Hash
+        if ($taskHashPreModel -ne $taskHashBefore -or $sourceHashPreModel -ne $sourceHashBefore) {
+            throw 'Preflight modified benchmark source/task files. Final attempt not started.'
         }
 
         Write-Host 'Preflight PASS: scoped file permissions only; sandbox requested; no dangerous bypass.' -ForegroundColor Green
